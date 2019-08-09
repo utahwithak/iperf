@@ -94,6 +94,9 @@ struct iperf_time;
 #define ACCESS_DENIED (-1)
 #define SERVER_ERROR (-2)
 
+typedef void (*iperf_interval_result_callback)( const struct iperf_interval_result* evt);
+typedef void (*iperf_final_result_callback)( const struct iperf_final_result* evt);
+
 /* Getter routines for some fields inside iperf_test. */
 int	iperf_get_verbose( struct iperf_test* ipt );
 int	iperf_get_control_socket( struct iperf_test* ipt );
@@ -128,14 +131,9 @@ int iperf_get_test_tos( struct iperf_test* ipt );
 char*	iperf_get_extra_data( struct iperf_test* ipt );
 char*	iperf_get_iperf_version(void);
 int	iperf_get_test_no_delay( struct iperf_test* ipt );
-
-typedef void (*iperf_interval_result_callback)( const struct iperf_interval_result* evt);
-typedef void (*iperf_final_result_callback)( const struct iperf_final_result* evt);
-
-void iperf_set_intermediate_result_callback(struct iperf_test* ipt, iperf_interval_result_callback callback);
 iperf_interval_result_callback iperf_get_intermediate_result_callback(struct iperf_test*);
-void iperf_set_final_result_callback(struct iperf_test* ipt, iperf_final_result_callback callback);
 iperf_final_result_callback iperf_get_final_result_callback(struct iperf_test*);
+
 
 /* Setter routines for some fields inside iperf_test. */
 void	iperf_set_verbose( struct iperf_test* ipt, int verbose );
@@ -161,7 +159,7 @@ void	iperf_set_test_server_hostname( struct iperf_test* ipt, char* server_hostna
 void    iperf_set_test_template( struct iperf_test *ipt, char *tmp_template );
 void	iperf_set_test_reverse( struct iperf_test* ipt, int reverse );
 void	iperf_set_test_json_output( struct iperf_test* ipt, int json_output );
-int	iperf_has_zerocopy( void );
+int	    iperf_has_zerocopy( void );
 void	iperf_set_test_zerocopy( struct iperf_test* ipt, int zerocopy );
 void	iperf_set_test_get_server_output( struct iperf_test* ipt, int get_server_output );
 void	iperf_set_test_bind_address( struct iperf_test* ipt, char *bind_address );
@@ -171,6 +169,8 @@ void    iperf_set_test_tos( struct iperf_test* ipt, int tos );
 void	iperf_set_extra_data( struct iperf_test* ipt, char *dat);
 void    iperf_set_test_bidirectional( struct iperf_test* ipt, int bidirectional);
 void    iperf_set_test_no_delay( struct iperf_test* ipt, int no_delay);
+void    iperf_set_intermediate_result_callback(struct iperf_test* ipt, iperf_interval_result_callback callback);
+void    iperf_set_final_result_callback(struct iperf_test* ipt, iperf_final_result_callback callback);
 
 #if defined(HAVE_SSL)
 void    iperf_set_test_client_username(struct iperf_test *ipt, char *client_username);

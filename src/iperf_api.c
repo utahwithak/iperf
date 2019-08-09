@@ -340,6 +340,24 @@ iperf_get_test_no_delay(struct iperf_test *ipt)
     return ipt->no_delay;
 }
 
+iperf_interval_result_callback
+iperf_get_intermediate_result_callback(struct iperf_test *ipt)
+{
+    if (ipt == NULL) {
+        return NULL;
+    }
+    return ipt->on_interval_results;
+}
+
+iperf_final_result_callback
+iperf_get_final_result_callback(struct iperf_test *ipt)
+{
+    if (ipt == NULL) {
+        return NULL;
+    }
+    return ipt->on_final_results;
+}
+
 /************** Setter routines for some fields inside iperf_test *************/
 
 void
@@ -607,6 +625,20 @@ void
 iperf_set_test_no_delay(struct iperf_test* ipt, int no_delay)
 {
     ipt->no_delay = no_delay;
+}
+void
+iperf_set_intermediate_result_callback(struct iperf_test* ipt, iperf_interval_result_callback callback)
+{
+    if (ipt != NULL) {
+        ipt->on_interval_results = callback;
+    }
+}
+
+void
+iperf_set_final_result_callback(struct iperf_test* ipt, iperf_final_result_callback callback) {
+    if (ipt != NULL) {
+        ipt->on_final_results = callback;
+    }
 }
 
 /********************** Get/set test protocol structure ***********************/
@@ -2610,6 +2642,78 @@ iperf_reset_stats(struct iperf_test *test)
     }
 }
 
+static void
+iperf_get_modes(struct iperf_test *test, int* lower_mode, int* upper_mode)
+{
+    /*
+     * We must to sum streams separately.
+     * For bidirectional mode we must to display
+     * information about sender and receiver streams.
+     * For client side we must handle sender streams
+     * firstly and receiver streams for server side.
+     * The following design allows us to do this.
+     */
+
+    if (test->mode == BIDIRECTIONAL) {
+        if (test->role == 'c') {
+            *lower_mode = -1;
+            *upper_mode = 0;
+        } else {
+            *lower_mode = 0;
+            *upper_mode = 1;
+        }
+    } else {
+        *lower_mode = test->mode;
+        *upper_mode = *lower_mode;
+    }
+}
+
+static int
+iperf_last_interval_ok(struct iperf_test *test) {
+
+    struct iperf_time temp_time;
+    struct iperf_stream *sp;
+    struct iperf_interval_results *irp;
+
+    /*
+     * Due to timing oddities, there can be cases, especially on the
+     * server side, where at the end of a test there is a fairly short
+     * interval with no data transferred.  This could caused by
+     * the control and data flows sharing the same path in the network,
+     * and having the control messages for stopping the test being
+     * queued behind the data packets.
+     *
+     * We'd like to try to omit that last interval when it happens, to
+     * avoid cluttering data and output with useless stuff.
+     * So we're going to try to ignore very short intervals (less than
+     * 10% of the interval time) that have no data.
+     */
+    int interval_ok = 0;
+    SLIST_FOREACH(sp, &test->streams, streams) {
+        irp = TAILQ_LAST(&sp->result->interval_results, irlisthead);
+        if (irp) {
+            iperf_time_diff(&irp->interval_start_time, &irp->interval_end_time, &temp_time);
+            double interval_len = iperf_time_in_secs(&temp_time);
+            if (test->debug) {
+                printf("interval_len %f bytes_transferred %" PRIu64 "\n", interval_len, irp->bytes_transferred);
+            }
+
+            /*
+             * If the interval is at least 10% the normal interval
+             * length, or if there were actual bytes transferrred,
+             * then we want to keep this interval.
+             */
+            if (interval_len >= test->stats_interval * 0.10 ||
+                irp->bytes_transferred > 0) {
+                interval_ok = 1;
+                if (test->debug) {
+                    printf("interval forces keep\n");
+                }
+            }
+        }
+    }
+    return interval_ok;
+}
 
 /**************************************************************************/
 
@@ -2707,49 +2811,11 @@ iperf_print_intermediate(struct iperf_test *test)
 
     int lower_mode, upper_mode;
     int current_mode;
-
-    /*
-     * Due to timing oddities, there can be cases, especially on the
-     * server side, where at the end of a test there is a fairly short
-     * interval with no data transferred.  This could caused by
-     * the control and data flows sharing the same path in the network,
-     * and having the control messages for stopping the test being
-     * queued behind the data packets.
-     *
-     * We'd like to try to omit that last interval when it happens, to
-     * avoid cluttering data and output with useless stuff.
-     * So we're going to try to ignore very short intervals (less than
-     * 10% of the interval time) that have no data.
-     */
-    int interval_ok = 0;
-    SLIST_FOREACH(sp, &test->streams, streams) {
-	irp = TAILQ_LAST(&sp->result->interval_results, irlisthead);
-	if (irp) {
-	    iperf_time_diff(&irp->interval_start_time, &irp->interval_end_time, &temp_time);
-	    double interval_len = iperf_time_in_secs(&temp_time);
-	    if (test->debug) {
-		printf("interval_len %f bytes_transferred %" PRIu64 "\n", interval_len, irp->bytes_transferred);
-	    }
-
-	    /*
-	     * If the interval is at least 10% the normal interval
-	     * length, or if there were actual bytes transferrred,
-	     * then we want to keep this interval.
-	     */
-	    if (interval_len >= test->stats_interval * 0.10 ||
-		irp->bytes_transferred > 0) {
-		interval_ok = 1;
-		if (test->debug) {
-		    printf("interval forces keep\n");
-		}
-	    }
-	}
-    }
-    if (!interval_ok) {
-	if (test->debug) {
-	    printf("ignoring short interval with no data\n");
-	}
-	return;
+    if (!iperf_last_interval_ok(test)) {
+        if (test->debug) {
+            printf("ignoring short interval with no data\n");
+        }
+        return;
     }
 
     if (test->json_output) {
@@ -2765,29 +2831,6 @@ iperf_print_intermediate(struct iperf_test *test)
         json_interval = NULL;
         json_interval_streams = NULL;
     }
-
-    /*
-     * We must to sum streams separately.
-     * For bidirectional mode we must to display
-     * information about sender and receiver streams.
-     * For client side we must handle sender streams
-     * firstly and receiver streams for server side.
-     * The following design allows us to do this.
-     */
-
-    if (test->mode == BIDIRECTIONAL) {
-        if (test->role == 'c') {
-            lower_mode = -1;
-            upper_mode = 0;
-        } else {
-            lower_mode = 0;
-            upper_mode = 1;
-        }
-    } else {
-        lower_mode = test->mode;
-        upper_mode = lower_mode;
-    }
-
 
     for (current_mode = lower_mode; current_mode <= upper_mode; ++current_mode) {
         char ubuf[UNIT_LEN];
@@ -3025,28 +3068,7 @@ iperf_print_results(struct iperf_test *test)
 	}
     }
 
-    /*
-     * We must to sum streams separately.
-     * For bidirectional mode we must to display
-     * information about sender and receiver streams.
-     * For client side we must handle sender streams
-     * firstly and receiver streams for server side.
-     * The following design allows us to do this.
-     */
-
-    if (test->mode == BIDIRECTIONAL) {
-        if (test->role == 'c') {
-            lower_mode = -1;
-            upper_mode = 0;
-        } else {
-            lower_mode = 0;
-            upper_mode = 1;
-        }
-    } else {
-        lower_mode = test->mode;
-        upper_mode = lower_mode;
-    }
-
+    iperf_get_modes(test, &lower_mode, &upper_mode);
 
     for (current_mode = lower_mode; current_mode <= upper_mode; ++current_mode) {
         cJSON *json_summary_stream = NULL;
