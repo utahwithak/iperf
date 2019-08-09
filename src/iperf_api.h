@@ -42,6 +42,8 @@ extern "C" { /* open extern "C" */
 struct iperf_test;
 struct iperf_stream_result;
 struct iperf_interval_results;
+struct iperf_interval_result;
+struct iperf_final_result;
 struct iperf_stream;
 struct iperf_time;
 
