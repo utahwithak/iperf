@@ -2891,6 +2891,94 @@ iperf_print_intermediate(struct iperf_test *test)
     }
 }
 
+static void
+iperf_callback_interval_results(struct iperf_test *test)
+{
+    struct iperf_stream *sp = NULL;
+    struct iperf_interval_results *irp;
+    struct iperf_time temp_time;
+
+
+    int lower_mode, upper_mode;
+    int current_mode;
+
+    if ( test->on_interval_results == NULL) {
+        return;
+    }
+
+    if (!iperf_last_interval_ok(test)) {
+        if (test->debug) {
+            printf("ignoring short interval with no data\n");
+        }
+        return;
+    }
+
+    iperf_get_modes(test, &lower_mode, &upper_mode);
+
+    for (current_mode = lower_mode; current_mode <= upper_mode; ++current_mode) {
+        struct iperf_interval_result currentResult;
+        currentResult.sender = current_mode * current_mode;
+
+
+        SLIST_FOREACH(sp, &test->streams, streams) {
+            if (sp->sender == currentResult.sender) {
+                /* sum up all streams */
+                irp = TAILQ_LAST(&sp->result->interval_results, irlisthead);
+                if (irp == NULL) {
+                    iperf_err(test,
+                              "callback_interval_results error: interval_results is NULL");
+                    return;
+                }
+                currentResult.bytes += irp->bytes_transferred;
+                if (test->protocol->id == Ptcp) {
+                    if (test->sender_has_retransmits == 1 && currentResult.sender) {
+                        currentResult.retransmits += irp->interval_retrans;
+                    }
+                } else {
+                    currentResult.total_packets += irp->interval_packet_count;
+                    currentResult.lost_packets += irp->interval_cnt_error;
+                    currentResult.avg_jitter += irp->jitter;
+                }
+            }
+        }
+
+        sp = SLIST_FIRST(&test->streams); /* reset back to 1st stream */
+        /* Only do this of course if there was a first stream */
+        if (sp) {
+            irp = TAILQ_LAST(&sp->result->interval_results, irlisthead);    /* use 1st stream for timing info */
+
+            currentResult.bandwidth = (double) currentResult.bytes / (double) irp->interval_duration;
+            currentResult.bits_per_second = currentResult.bandwidth * 8;
+            currentResult.duration = (double)irp->interval_duration;
+            iperf_time_diff(&sp->result->start_time,&irp->interval_start_time, &temp_time);
+            currentResult.start_time = iperf_time_in_secs(&temp_time);
+            iperf_time_diff(&sp->result->start_time,&irp->interval_end_time, &temp_time);
+            currentResult.end_time = iperf_time_in_secs(&temp_time);
+
+
+            if (test->protocol->id == Ptcp || test->protocol->id == Psctp) {
+                currentResult.omitted = irp->omitted;
+            } else {
+                currentResult.omitted = test->omitting;
+
+                /* Interval sum, UDP. */
+                if (!currentResult.sender) {
+                    currentResult.avg_jitter /= test->num_streams;
+                    if (currentResult.total_packets > 0) {
+                        currentResult.lost_percent = 100.0 * currentResult.lost_packets / currentResult.total_packets;
+                    }
+                    else {
+                        currentResult.lost_percent = 0.0;
+                    }
+                }
+            }
+        }
+
+        test->on_interval_results(&currentResult);
+    }
+
+}
+
 /**
  * Print overall summary statistics at the end of a test.
  */
@@ -3381,6 +3469,129 @@ iperf_print_results(struct iperf_test *test)
     /* Set real sender_has_retransmits for current side */
     if (test->mode == BIDIRECTIONAL)
         test->sender_has_retransmits = tmp_sender_has_retransmits;
+}
+
+static void
+iperf_callback_results(struct iperf_test *test)
+{
+    if (test->on_final_results == NULL) {
+        return;
+    }
+
+    int lower_mode = 0, upper_mode = 0;
+    int current_mode;
+
+    iperf_get_modes(test, &lower_mode, &upper_mode);
+
+    for (current_mode = lower_mode; current_mode <= upper_mode; ++current_mode) {
+        struct iperf_final_result final_results;
+        int total_retransmits = 0;
+        int total_packets = 0, lost_packets = 0;
+        int sender_packet_count = 0, receiver_packet_count = 0; /* for this stream, this interval */
+        int sender_total_packets = 0, receiver_total_packets = 0; /* running total */
+        struct iperf_stream *sp = NULL;
+        iperf_size_t bytes_sent, total_sent = 0;
+        double avg_jitter = 0.0, lost_percent = 0.0;
+        double sender_time = 0.0, receiver_time = 0.0;
+        struct iperf_time temp_time;
+
+        int stream_must_be_sender = current_mode * current_mode;
+
+        final_results.sender = stream_must_be_sender;
+
+        final_results.start_time = 0.;
+        sp = SLIST_FIRST(&test->streams);
+
+        if (sp) {
+            iperf_time_diff(&sp->result->start_time, &sp->result->end_time, &temp_time);
+            final_results.end_time = iperf_time_in_secs(&temp_time);
+
+            final_results.duration = final_results.end_time - final_results.start_time;
+            sender_time = sp->result->sender_time;
+            receiver_time = sp->result->receiver_time;
+            SLIST_FOREACH(sp, &test->streams, streams) {
+                if (sp->sender == stream_must_be_sender) {
+                    if (stream_must_be_sender) {
+                        bytes_sent = sp->result->bytes_sent - sp->result->bytes_sent_omit;
+                        total_sent += bytes_sent;
+                    } else {
+                        bytes_sent = sp->result->bytes_received;
+                        total_sent += bytes_sent;
+                    }
+
+                    if (sp->sender) {
+                        sender_packet_count = sp->packet_count;
+                        receiver_packet_count = sp->peer_packet_count;
+                    }
+                    else {
+                        sender_packet_count = sp->peer_packet_count;
+                        receiver_packet_count = sp->packet_count;
+                    }
+
+                    if (test->protocol->id == Ptcp || test->protocol->id == Psctp) {
+                        if (test->sender_has_retransmits) {
+                            total_retransmits += sp->result->stream_retrans;
+                        }
+                    } else {
+                        /*
+                         * Running total of the total number of packets.  Use the sender packet count if we
+                         * have it, otherwise use the receiver packet count.
+                         */
+                        int packet_count = sender_packet_count ? sender_packet_count : receiver_packet_count;
+                        total_packets += (packet_count - sp->omitted_packet_count);
+                        sender_total_packets += (sender_packet_count - sp->omitted_packet_count);
+                        receiver_total_packets += (receiver_packet_count - sp->omitted_packet_count);
+                        lost_packets += (sp->cnt_error - sp->omitted_cnt_error);
+                        avg_jitter += sp->jitter;
+                    }
+                }
+            }
+        }
+        final_results.bytes = total_sent;
+        final_results.total_packets = total_packets;
+        final_results.lost_packets = lost_packets;
+        final_results.avg_jitter = avg_jitter;
+
+        final_results.bandwidth = (double) total_sent / final_results.duration;
+
+        final_results.bits_per_second = final_results.bandwidth * 8;
+
+        if (test->protocol->id == Ptcp || test->protocol->id == Psctp) {
+            if (test->sender_has_retransmits) {
+                final_results.retransmits = total_retransmits;
+
+            }
+        } else {
+            /* Summary sum, UDP. */
+            final_results.avg_jitter /= test->num_streams;
+            /* If no packets were sent, arbitrarily set loss percentage to 0. */
+            if (total_packets > 0) {
+                lost_percent = 100.0 * lost_packets / total_packets;
+            }
+            else {
+                lost_percent = 0.0;
+            }
+            final_results.lost_percent = lost_percent;
+
+        }
+        test->on_final_results(&final_results);
+    }
+}
+
+
+static void
+iperf_interval_reporting(struct iperf_test *test)
+{
+    /* print interval results for each stream */
+    iperf_print_intermediate(test);
+    iperf_callback_interval_results(test);
+}
+
+static void
+iperf_final_reporting(struct iperf_test *test)
+{
+    iperf_print_results(test);
+    iperf_callback_results(test);
 }
 
 /**************************************************************************/

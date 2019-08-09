@@ -129,6 +129,48 @@ struct iperf_stream_result
     void     *data;
 };
 
+struct iperf_interval_result
+{
+    int sender;
+    double start_time;
+    double end_time;
+    double duration;
+    iperf_size_t bytes;
+    double bandwidth;
+    double bits_per_second;
+    uint64_t packets;
+    int omitted;
+    int retransmits;
+
+    int total_packets;
+    int lost_packets;
+    double avg_jitter;
+    double lost_percent;
+
+};
+
+struct iperf_final_result
+{
+    int sender;
+    double start_time;
+    double end_time;
+    double duration;
+    iperf_size_t bytes;
+    
+    double bandwidth;
+    double bits_per_second;
+    uint64_t packets;
+    int omitted;
+    int retransmits;
+
+    int total_packets;
+    int lost_packets;
+    double avg_jitter;
+    double lost_percent;
+
+};
+
+
 #define COOKIE_SIZE 37		/* size of an ascii uuid */
 struct iperf_settings
 {
@@ -340,6 +382,9 @@ struct iperf_test
     void      (*on_test_start)(struct iperf_test *);
     void      (*on_connect)(struct iperf_test *);
     void      (*on_test_finish)(struct iperf_test *);
+
+    void      (*on_interval_results)(const struct iperf_interval_result*);
+    void      (*on_final_results)(const struct iperf_final_result*);
 
     /* cJSON handles for use when in -J mode */\
     cJSON *json_top;
