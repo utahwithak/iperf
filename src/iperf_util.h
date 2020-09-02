@@ -31,6 +31,7 @@
 #include "cjson.h"
 #include <sys/select.h>
 #include <stddef.h>
+#include <stdio.h>
 
 int readentropy(void *out, size_t outsize);
 

@@ -27,10 +27,12 @@
 #ifndef __IPERF_H
 #define __IPERF_H
 
-#include "iperf_config.h"
+#include "../iperf_config.h"
 
 #include <sys/time.h>
 #include <sys/types.h>
+#include <stdio.h>
+
 #ifdef HAVE_STDINT_H
 #include <stdint.h>
 #endif
@@ -58,19 +60,22 @@
 # endif
 #endif
 
-#include "timer.h"
-#include "queue.h"
-#include "cjson.h"
-#include "iperf_time.h"
+#include "../timer.h"
+#include "../queue.h"
+#include "../cjson.h"
+#include "../iperf_time.h"
 
 #if defined(HAVE_SSL)
 #include <openssl/bio.h>
 #include <openssl/evp.h>
 #endif // HAVE_SSL
 
+
 #if !defined(__IPERF_API_H)
 typedef uint64_t iperf_size_t;
 #endif // __IPERF_API_H
+
+#include "iperf_api.h"
 
 struct iperf_interval_results
 {
